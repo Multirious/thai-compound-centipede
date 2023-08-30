@@ -51,6 +51,13 @@ impl<'a> SuccessorCache<'a> {
     fn successor_for(&self, word: Word<'a>) -> Option<&HashSet<Word<'a>>> {
         self.0.get(word)
     }
+
+    fn is_2_words_compound(&self, word_a: Word<'a>, word_b: Word<'a>) -> bool {
+        let Some(word_a_successor) = self.0.get(word_a) else {
+            return false;
+        };
+        word_a_successor.contains(word_b)
+    }
 }
 
 struct CompoundWords<'a>(HashMap<Word<'a>, Vec<Word<'a>>>);
@@ -279,7 +286,7 @@ fn all_possible_compound_centipede<P: AsRef<Path>>(
         .par_iter()
         .map(|word| {
             debug!("solving for \"{word}\".");
-            let mut word_graph =
+            let word_graph =
                 possible_compound_centipede_with_start(&successor_cache, word, max_len);
             let temp_dir = TEMP_DIR;
             let mut this_word_file = fs::File::options()
@@ -288,9 +295,11 @@ fn all_possible_compound_centipede<P: AsRef<Path>>(
                 .create(true)
                 .open(format!("{temp_dir}/{word}"))?;
             for line in word_graph {
+                // CONFIG HERE
                 if line.len() != 8 {
                     continue;
                 }
+                // -----------
                 for word in line {
                     write!(this_word_file, "{word} ")?;
                 }

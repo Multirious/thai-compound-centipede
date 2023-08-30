@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use log::info;
+use log::{debug, info};
 use rayon::prelude::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -9,69 +9,6 @@ use std::{
 };
 
 const TEMP_DIR: &str = "/tmp/uhhyeahhh";
-
-/// assumed list is sorted
-fn find_compound_word(word_char_map: HashMap<Vec<char>, &str>) -> HashMap<&str, Vec<&str>> {
-    // finding compounds
-    let mut compound_word_hashmap = HashMap::new();
-    for current_word in word_char_map.values() {
-        let current_word_chars = current_word.chars().collect::<Vec<_>>();
-        let char_count = current_word_chars.len();
-        let mut is_compound = false;
-        let mut current_compoenets = vec![];
-        let mut start = 0;
-        let mut end = char_count - 1;
-        loop {
-            let current_word_slice = &current_word_chars[start..end];
-            let sub_word = word_char_map.get(&current_word_slice.to_vec());
-            if let Some(sub_word) = sub_word {
-                current_compoenets.push(*sub_word);
-                start = end;
-                end = char_count;
-            } else {
-                end = match end.checked_sub(1) {
-                    Some(e) => e,
-                    None => break,
-                };
-                if end < start {
-                    break;
-                }
-            }
-            if start == char_count {
-                is_compound = true;
-                break;
-            }
-        }
-
-        if is_compound {
-            compound_word_hashmap.insert(*current_word, current_compoenets);
-        }
-    }
-
-    fn recursively_split_compound_components<'b>(
-        compound_word_hashmap: &HashMap<&'b str, Vec<&'b str>>,
-        components: Vec<&'b str>,
-    ) -> Vec<&'b str> {
-        components
-            .into_iter()
-            .flat_map(|word| match compound_word_hashmap.get(word) {
-                Some(compound) => {
-                    recursively_split_compound_components(compound_word_hashmap, compound.clone())
-                }
-                None => vec![word],
-            })
-            .collect()
-    }
-
-    let compound_words = compound_word_hashmap.keys().copied().collect::<Vec<_>>();
-    for compound_word in compound_words {
-        let components = compound_word_hashmap.remove(compound_word).unwrap();
-        let components = recursively_split_compound_components(&compound_word_hashmap, components);
-        compound_word_hashmap.insert(compound_word, components);
-    }
-
-    compound_word_hashmap
-}
 
 // fn compound_centipede<'a>(
 //     compound_words: HashMap<&str, Vec<&'a str>>,
@@ -91,73 +28,149 @@ fn find_compound_word(word_char_map: HashMap<Vec<char>, &str>) -> HashMap<&str, 
 //     //     path
 //     // }
 // }
+
+type Word<'a> = &'a str;
+
 #[derive(Debug)]
-struct SuccessorCache<'a>(HashMap<&'a str, HashSet<&'a str>>);
+struct SuccessorCache<'a>(HashMap<Word<'a>, HashSet<Word<'a>>>);
 
 impl<'a> SuccessorCache<'a> {
-    fn new(words: &OrganizedWords<'a>) -> SuccessorCache<'a> {
+    fn new(
+        non_compound_words: &NonCompoundWords<'a>,
+        compound_words: &CompoundWords<'a>,
+    ) -> SuccessorCache<'a> {
         let mut map = HashMap::new();
-        for word in &words.non_compound_words {
-            let successor = CompoundWordTree::find_successors(words, word);
+        for word in &non_compound_words.0 {
+            let successor =
+                CompoundWordTree::find_successors(non_compound_words, compound_words, word);
             map.insert(*word, successor);
         }
         SuccessorCache(map)
     }
 
-    fn successor_for(&self, word: &'a str) -> Option<&HashSet<&'a str>> {
+    fn successor_for(&self, word: Word<'a>) -> Option<&HashSet<Word<'a>>> {
         self.0.get(word)
     }
 }
 
-#[derive(Debug)]
+struct CompoundWords<'a>(HashMap<Word<'a>, Vec<Word<'a>>>);
+
+impl<'a> CompoundWords<'a> {
+    /// assumed list is sorted
+    fn new(word_char_map: &WordCharMap<'a>) -> CompoundWords<'a> {
+        // finding compounds
+        let mut compound_word_hashmap = HashMap::new();
+        for current_word in word_char_map.0.values() {
+            let current_word_chars = current_word.chars().collect::<Vec<_>>();
+            let char_count = current_word_chars.len();
+            let mut is_compound = false;
+            let mut current_compoenets = vec![];
+            let mut start = 0;
+            let mut end = char_count - 1;
+            loop {
+                let current_word_slice = &current_word_chars[start..end];
+                let sub_word = word_char_map.0.get(&current_word_slice.to_vec());
+                if let Some(sub_word) = sub_word {
+                    current_compoenets.push(*sub_word);
+                    start = end;
+                    end = char_count;
+                } else {
+                    end = match end.checked_sub(1) {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    if end < start {
+                        break;
+                    }
+                }
+                if start == char_count {
+                    is_compound = true;
+                    break;
+                }
+            }
+
+            if is_compound {
+                compound_word_hashmap.insert(*current_word, current_compoenets);
+            }
+        }
+
+        fn recursively_split_compound_components<'b>(
+            compound_word_hashmap: &HashMap<Word<'b>, Vec<Word<'b>>>,
+            components: Vec<Word<'b>>,
+        ) -> Vec<Word<'b>> {
+            components
+                .into_iter()
+                .flat_map(|word| match compound_word_hashmap.get(word) {
+                    Some(compound) => recursively_split_compound_components(
+                        compound_word_hashmap,
+                        compound.clone(),
+                    ),
+                    None => vec![word],
+                })
+                .collect()
+        }
+
+        let compound_words = compound_word_hashmap.keys().copied().collect::<Vec<_>>();
+        for compound_word in compound_words {
+            let components = compound_word_hashmap.remove(compound_word).unwrap();
+            let components =
+                recursively_split_compound_components(&compound_word_hashmap, components);
+            compound_word_hashmap.insert(compound_word, components);
+        }
+
+        CompoundWords(compound_word_hashmap)
+    }
+}
+struct NonCompoundWords<'a>(HashSet<Word<'a>>);
+
+impl<'a> NonCompoundWords<'a> {
+    fn new(compound_words: &CompoundWords<'a>) -> NonCompoundWords<'a> {
+        NonCompoundWords(
+            compound_words
+                .0
+                .values()
+                .flatten()
+                .copied()
+                .collect::<HashSet<_>>(),
+        )
+    }
+}
+struct WordCharMap<'a>(HashMap<Vec<char>, Word<'a>>);
+
+impl<'a> WordCharMap<'a> {
+    fn new(words: &[Word<'a>]) -> WordCharMap<'a> {
+        WordCharMap(HashMap::from_iter(
+            words
+                .iter()
+                .map(|word| (word.chars().collect::<Vec<_>>(), *word)),
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
 struct CompoundWordTree<'a> {
-    word: &'a str,
+    word: Word<'a>,
     nexts: Vec<CompoundWordTree<'a>>,
 }
 
 impl<'a> CompoundWordTree<'a> {
-    #[allow(unused)]
-    fn new(
-        words: &OrganizedWords<'a>,
-        used_word: &mut HashSet<&'a str>,
-        word: &'a str,
-        limit: u64,
-    ) -> CompoundWordTree<'a> {
-        if limit == 0 {
-            return CompoundWordTree {
-                word,
-                nexts: vec![],
-            };
-        };
-        let nexts = CompoundWordTree::find_successors(words, word);
-        let nexts = nexts.difference(used_word).copied().collect::<Vec<_>>();
-        used_word.extend(&nexts);
-        CompoundWordTree {
-            word,
-            nexts: nexts
-                .into_iter()
-                .map(|next| CompoundWordTree::new(words, used_word, next, limit - 1))
-                .collect(),
-        }
-    }
-
     fn new_from_cache(
         successor_cache: &SuccessorCache<'a>,
-        used_word: &mut HashSet<&'a str>,
-        word: &'a str,
+        used_word: &mut HashSet<Word<'a>>,
+        word: Word<'a>,
         limit: u64,
     ) -> CompoundWordTree<'a> {
-        if limit == 0 {
+        if limit == 1 {
             return CompoundWordTree {
                 word,
                 nexts: vec![],
             };
         };
-        let nexts = successor_cache
-            .successor_for(word)
-            .cloned()
-            .unwrap_or_default();
-        let nexts = nexts.difference(used_word).copied().collect::<Vec<_>>();
+        let nexts = successor_cache.successor_for(word);
+        let nexts = match nexts {
+            Some(nexts) => nexts.difference(used_word).copied().collect::<Vec<_>>(),
+            None => vec![],
+        };
         used_word.extend(&nexts);
         CompoundWordTree {
             word,
@@ -170,11 +183,15 @@ impl<'a> CompoundWordTree<'a> {
         }
     }
 
-    fn find_successors(words: &OrganizedWords<'a>, word: &'a str) -> HashSet<&'a str> {
+    fn find_successors(
+        non_compound_words: &NonCompoundWords<'a>,
+        compound_words: &CompoundWords<'a>,
+        word: Word<'a>,
+    ) -> HashSet<Word<'a>> {
         let mut sucessors = HashSet::new();
-        for other_word in words.non_compound_words.iter() {
+        for other_word in non_compound_words.0.iter() {
             let test_word = word.to_string() + other_word;
-            if words.compound_words.contains_key(&test_word[..]) {
+            if compound_words.0.contains_key(&test_word[..]) {
                 sucessors.insert(*other_word);
             }
         }
@@ -186,7 +203,7 @@ impl<'a> CompoundWordTree<'a> {
         1 + self.nexts.iter().map(|next| next.count()).sum::<usize>()
     }
 
-    fn graph(&self) -> Vec<Vec<&'a str>> {
+    fn graph(&self) -> Vec<Vec<Word<'a>>> {
         let mut lines = vec![vec![self.word]];
         for next_node in &self.nexts {
             let graphed_next_node_lines = next_node.graph();
@@ -198,11 +215,6 @@ impl<'a> CompoundWordTree<'a> {
         }
         lines
     }
-}
-
-struct OrganizedWords<'a> {
-    compound_words: HashMap<&'a str, Vec<&'a str>>,
-    non_compound_words: HashSet<&'a str>,
 }
 
 fn main() -> Result<()> {
@@ -223,39 +235,29 @@ fn main() -> Result<()> {
 
     all_words.sort_by_key(|word| word.chars().count());
     all_words.reverse();
-    let word_char_map = HashMap::from_iter(
-        all_words
-            .iter()
-            .map(|word| (word.chars().collect::<Vec<_>>(), *word)),
-    );
-    let compound_words = find_compound_word(word_char_map);
-    let non_compound_words = compound_words
-        .values()
-        .flatten()
-        .copied()
-        .collect::<HashSet<_>>();
-    let words = OrganizedWords {
-        compound_words,
-        non_compound_words,
-    };
+    let word_char_map = WordCharMap::new(&all_words);
+    let compound_words = CompoundWords::new(&word_char_map);
+    drop(word_char_map);
+    let non_compound_words = NonCompoundWords::new(&compound_words);
 
-    all_possible_compound_centipede(&words, u64::MAX, "all.txt")?;
+    all_possible_compound_centipede(&non_compound_words, &compound_words, 8, "all.txt")?;
 
     Ok(())
 }
 
 fn possible_compound_centipede_with_start<'a>(
     successor_cache: &SuccessorCache<'a>,
-    word: &'a str,
+    word: Word<'a>,
     max_len: u64,
-) -> Vec<Vec<&'a str>> {
+) -> Vec<Vec<Word<'a>>> {
     let mut used_word = HashSet::new();
     let tree = CompoundWordTree::new_from_cache(successor_cache, &mut used_word, word, max_len);
     tree.graph()
 }
 
 fn all_possible_compound_centipede<P: AsRef<Path>>(
-    words: &OrganizedWords<'_>,
+    non_compound_words: &NonCompoundWords<'_>,
+    compound_words: &CompoundWords<'_>,
     max_len: u64,
     output: P,
 ) -> Result<()> {
@@ -267,16 +269,17 @@ fn all_possible_compound_centipede<P: AsRef<Path>>(
         }
     };
     let path = PathBuf::from(TEMP_DIR).canonicalize().unwrap();
-    info!("Temp directory is \"{}\"", path.display());
-    info!("Calculating and caching successors.");
-    let successor_cache = SuccessorCache::new(words);
+    debug!("temp directory is \"{}\"", path.display());
+    info!("calculating and caching successors.");
+    let successor_cache = SuccessorCache::new(non_compound_words, compound_words);
     let mut output_file = fs::File::options().create(true).append(true).open(output)?;
-    words
-        .non_compound_words
+    info!("solving words");
+    non_compound_words
+        .0
         .par_iter()
         .map(|word| {
-            info!("calculating for \"{word}\".");
-            let word_graph =
+            debug!("solving for \"{word}\".");
+            let mut word_graph =
                 possible_compound_centipede_with_start(&successor_cache, word, max_len);
             let temp_dir = TEMP_DIR;
             let mut this_word_file = fs::File::options()
@@ -285,6 +288,9 @@ fn all_possible_compound_centipede<P: AsRef<Path>>(
                 .create(true)
                 .open(format!("{temp_dir}/{word}"))?;
             for line in word_graph {
+                if line.len() != 8 {
+                    continue;
+                }
                 for word in line {
                     write!(this_word_file, "{word} ")?;
                 }
@@ -298,7 +304,7 @@ fn all_possible_compound_centipede<P: AsRef<Path>>(
     output_file.seek(io::SeekFrom::End(0))?;
     for files in fs::read_dir(TEMP_DIR)? {
         let file = files?;
-        println!("{}", file.path().display());
+        debug!("merging file {}", file.path().display());
         let mut file = fs::File::options().read(true).open(file.path())?;
         io::copy(&mut file, &mut output_file)?;
     }
